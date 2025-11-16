@@ -9,18 +9,29 @@ from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 import io
 
-# CSV読み込み
-uploaded_file = "2025-11-15T04-52_export.csv"
-df = pd.read_csv(uploaded_file)
-
-# 列を文字列型に変換（「:」入力可能にする）
-for col in ["勤務開始", "勤務終了", "休憩開始", "休憩終了"]:
-    df[col] = df[col].astype(str)
-
+# ページ設定
 st.set_page_config(page_title="昼休みシフト最適化ツール", layout="wide")
 st.title("昼休みシフト最適化ツール")
 
-st.subheader("スタッフ情報（CSVから読み込み済み）")
+# ✅ 初期データを固定（CSV不要）
+data = {
+    "スタッフ名": ["増田", "松葉", "スタッフ3", "スタッフ4", "スタッフ5"],
+    "勤務開始": ["08:00", "08:00", "09:00", "14:00", "09:00"],
+    "勤務終了": ["18:00", "18:00", "12:00", "18:00", "15:00"],
+    "休憩開始": ["", "", "", "", ""],
+    "休憩終了": ["", "", "", "", ""],
+    "休憩要否": ["true", "true", "false", "false", "false"]
+}
+
+df = pd.DataFrame(data)
+
+# 列を文字列型に変換
+for col in ["勤務開始", "勤務終了", "休憩開始", "休憩終了"]:
+    df[col] = df[col].astype(str)
+
+st.subheader("スタッフ情報（初期値固定）")
+
+# 編集可能テーブル
 edited_data = st.data_editor(
     df,
     column_config={
@@ -30,8 +41,10 @@ edited_data = st.data_editor(
     num_rows="dynamic"
 )
 
+# 休憩時間設定
 break_duration_hours = st.number_input("休憩時間（時間）※未入力時のみ適用", min_value=1.0, max_value=3.0, value=2.0)
 
+# スケジュール作成ボタン
 if st.button("スケジュールを作成"):
     staff_info = edited_data.copy()
     today = datetime.today().strftime("%Y-%m-%d")
@@ -43,7 +56,7 @@ if st.button("スケジュールを作成"):
     breaks = []
     for _, row in staff_info.iterrows():
         if str(row["休憩要否"]).lower() == "true":
-            # 手動入力チェック（NaNや空欄を除外）
+            # 手動入力チェック
             if pd.notna(row["休憩開始"]) and pd.notna(row["休憩終了"]) and row["休憩開始"].strip() and row["休憩終了"].strip():
                 try:
                     start = pd.to_datetime(today + " " + row["休憩開始"])
@@ -52,12 +65,12 @@ if st.button("スケジュールを作成"):
                 except ValueError:
                     breaks.append(None)
             else:
-                # 自動割り当て（勤務時間が休憩時間より長い場合のみ）
-                if (row["勤務終了"] - row["勤務開始"]).total_seconds()/3600 >= break_duration_hours:
+                # 自動割り当て
+                if (row["勤務終了"] - row["勤務開始"]).total_seconds() / 3600 >= break_duration_hours:
                     start_range = pd.date_range(today + " 09:00", today + " 17:00", freq="30min")
                     start_range = [t for t in start_range if row["勤務開始"] <= t <= (row["勤務終了"] - pd.Timedelta(hours=break_duration_hours))]
                     if start_range:
-                        best_start = start_range[int(len(start_range)/2)]
+                        best_start = start_range[int(len(start_range) / 2)]
                         breaks.append((best_start, best_start + pd.Timedelta(hours=break_duration_hours)))
                     else:
                         breaks.append(None)
@@ -69,7 +82,6 @@ if st.button("スケジュールを作成"):
     # タイムライン用データ
     timeline_data = []
     for i, row in enumerate(staff_info.itertuples()):
-        # 勤務時間
         timeline_data.append({
             "スタッフ": row.スタッフ名,
             "開始": row.勤務開始,
@@ -77,7 +89,6 @@ if st.button("スケジュールを作成"):
             "タイプ": "勤務",
             "ラベル": f"{row.勤務開始.strftime('%H:%M')} - {row.勤務終了.strftime('%H:%M')}"
         })
-        # 休憩時間
         if breaks[i] is not None:
             start, end = breaks[i]
             timeline_data.append({
@@ -91,12 +102,13 @@ if st.button("スケジュールを作成"):
     timeline_df = pd.DataFrame(timeline_data)
 
     # タイムラインチャート
-    fig = px.timeline(timeline_df, x_start="開始", x_end="終了", y="スタッフ", color="タイプ",
-                      text="ラベル", color_discrete_map={"勤務": "seagreen", "休憩": "lightgray"})
+    fig = px.timeline(
+        timeline_df, x_start="開始", x_end="終了", y="スタッフ", color="タイプ",
+        text="ラベル", color_discrete_map={"勤務": "seagreen", "休憩": "lightgray"}
+    )
     fig.update_traces(textposition="inside", insidetextanchor="middle", textfont=dict(size=14))
     fig.update_xaxes(range=[pd.to_datetime(today + " 08:00"), pd.to_datetime(today + " 18:00")], tickformat="%H:%M")
     fig.update_layout(height=600, title_text="勤務時間＋休憩時間（手動入力対応＋横軸固定）", font=dict(family="wqy-zenhei", size=16))
-
     st.plotly_chart(fig, use_container_width=True)
 
     # Excel出力
@@ -120,6 +132,5 @@ if st.button("スケジュールを作成"):
     for col in range(1, 4):
         max_length = max(len(str(cell.value)) for cell in ws[get_column_letter(col)])
         ws.column_dimensions[get_column_letter(col)].width = max_length + 2
-
     wb.save(excel_buffer)
     st.download_button("Excelファイルをダウンロード", data=excel_buffer.getvalue(), file_name="schedule.xlsx")
